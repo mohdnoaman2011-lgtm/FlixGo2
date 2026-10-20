@@ -1,27 +1,23 @@
 name: flixgo
-description: FlixGo - تحميل الفيديوهات والصوتيات
-publish_to: none
+description: FlixGo - video and audio downloader UI.
+publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.4.0 <4.0.0"
+  sdk: '>=3.0.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
-  flutter_localizations:
-    sdk: flutter
-  provider: ^6.1.2
-  dio: ^5.7.0
-  path_provider: ^2.1.4
-  shared_preferences: ^2.3.2
-  open_filex: ^4.5.0
-  connectivity_plus: ^6.0.5
   google_fonts: ^6.2.1
-  gal: ^2.3.0
-  file_saver: ^0.2.14
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
 
 flutter:
   uses-material-design: true
   assets:
-    - assets/
+    - assets/flixgo_logo.png
+    - assets/flixgo_mark.png
