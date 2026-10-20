@@ -1,7 +1,8 @@
-// FlixGo — built-in player (uses the video_player package, handles video and audio).
-// Downloads in this app are still simulated, so the player opens a sample file.
-// To play a real downloaded file use: VideoPlayerController.file(File(path)).
+// FlixGo — built-in player (video_player package, handles video and audio).
+// Plays a real downloaded file when [path] is given, otherwise the [source] URL (demo).
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
 const kDemoVideo =
@@ -9,7 +10,8 @@ const kDemoVideo =
 const kDemoAudio = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
 
 class PlayerPage extends StatefulWidget {
-  final String title, subtitle, source, pageTitle, errorText, demoText;
+  final String title, subtitle, pageTitle, errorText, demoText;
+  final String? source, path;
   final bool audio, rtl;
   final Color accent;
 
@@ -17,7 +19,8 @@ class PlayerPage extends StatefulWidget {
     super.key,
     required this.title,
     required this.subtitle,
-    required this.source,
+    this.source,
+    this.path,
     required this.pageTitle,
     required this.errorText,
     required this.demoText,
@@ -49,7 +52,10 @@ class _PlayerPageState extends State<PlayerPage> {
   @override
   void initState() {
     super.initState();
-    ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.source));
+    final path = widget.path;
+    ctrl = path != null
+        ? VideoPlayerController.file(File(path))
+        : VideoPlayerController.networkUrl(Uri.parse(widget.source ?? kDemoVideo));
     ctrl.addListener(_onTick);
     ctrl.initialize().then((_) {
       if (!mounted) return;
@@ -244,6 +250,15 @@ class _PlayerPageState extends State<PlayerPage> {
                               color: ink,
                               fontSize: 18,
                               fontWeight: FontWeight.w800)),
+                      const Spacer(),
+                      if (widget.path != null)
+                        _circle(
+                            Icons.share_rounded,
+                            () => Share.shareXFiles([XFile(widget.path!)],
+                                text: widget.title),
+                            'share',
+                            size: 44,
+                            icon: 20),
                     ]),
                     const SizedBox(height: 24),
                     _media(),
@@ -345,11 +360,14 @@ class _PlayerPageState extends State<PlayerPage> {
                             ]),
                       ]),
                     ),
-                    const SizedBox(height: 30),
-                    Center(
-                      child: Text(widget.demoText,
-                          style: const TextStyle(color: mute, fontSize: 12.5)),
-                    ),
+                    if (widget.path == null) ...[
+                      const SizedBox(height: 30),
+                      Center(
+                        child: Text(widget.demoText,
+                            style:
+                                const TextStyle(color: mute, fontSize: 12.5)),
+                      ),
+                    ],
                   ],
                 ),
               ),

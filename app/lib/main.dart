@@ -1,12 +1,17 @@
 // FlixGo — Flutter UI.
-// Files: lib/main.dart (this file), lib/logo_data.dart (embedded logo), lib/player.dart (built-in player).
-// Dependencies: google_fonts, video_player (see pubspec.yaml). No assets folder needed.
-import 'dart:async';
+// Files: lib/main.dart (this file), lib/api.dart (server client), lib/logo_data.dart (embedded logo),
+// lib/player.dart (built-in player). Real downloads need the server in /server (see its README).
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'api.dart';
 import 'logo_data.dart';
 import 'player.dart';
 
@@ -90,6 +95,16 @@ const tr = {
     'version': 'الإصدار', 'player': 'المشغل',
     'playErr': 'تعذّر تشغيل الملف. تحقق من الاتصال بالإنترنت.',
     'demo': 'معاينة تجريبية بملف نموذجي', 'play': 'تشغيل',
+    'secServer': 'السيرفر', 'srvUrl': 'عنوان السيرفر', 'srvKey': 'مفتاح الوصول (اختياري)',
+    'srvTest': 'اختبار الاتصال', 'testing': 'جارٍ الاختبار…',
+    'testOk': 'متصل بالسيرفر ✓', 'testNoFfmpeg': 'متصل، لكن ffmpeg غير مثبّت على السيرفر',
+    'noServer': 'أدخل عنوان السيرفر في الإعدادات أولاً',
+    'eAuth': 'مفتاح الوصول غير صحيح', 'eNet': 'تعذّر الاتصال بالسيرفر',
+    'eGen': 'فشل التحميل', 'eSave': 'تعذّر حفظ الملف على الجهاز',
+    'wifiBlock': 'التحميل متاح عبر Wi‑Fi فقط (غيّر ذلك من الإعدادات)',
+    'delTitle': 'حذف الملف؟', 'delBody': 'سيُحذف الملف من جهازك.',
+    'delYes': 'حذف', 'cancel': 'إلغاء', 'hint': 'اضغط مطولاً على ملف لحذفه · اضغط على الخطأ لإعادة المحاولة',
+    'folderVal': 'مساحة التطبيق · استخدم زر المشاركة للحفظ',
   },
   'en': {
     'tag': 'Download video and audio\nfrom your favorite platforms',
@@ -118,16 +133,55 @@ const tr = {
     'version': 'Version', 'player': 'Player',
     'playErr': 'Could not play this file. Check your internet connection.',
     'demo': 'Demo preview using a sample file', 'play': 'Play',
+    'secServer': 'Server', 'srvUrl': 'Server address', 'srvKey': 'Access key (optional)',
+    'srvTest': 'Test connection', 'testing': 'Testing…',
+    'testOk': 'Connected to the server ✓', 'testNoFfmpeg': 'Connected, but ffmpeg is missing on the server',
+    'noServer': 'Enter the server address in Settings first',
+    'eAuth': 'Wrong access key', 'eNet': 'Could not reach the server',
+    'eGen': 'Download failed', 'eSave': 'Could not save the file',
+    'wifiBlock': 'Wi‑Fi only is on (change it in Settings)',
+    'delTitle': 'Delete file?', 'delBody': 'The file will be removed from your device.',
+    'delYes': 'Delete', 'cancel': 'Cancel', 'hint': 'Long-press a file to delete · tap a failed one to retry',
+    'folderVal': 'App storage · use Share to save a copy',
   },
 };
 
 class Item {
   final Plat p;
   final bool audio;
-  final String q;
+  final String q, url;
   double pr = 0;
-  Item(this.p, this.audio, this.q);
-  bool get done => pr >= 100;
+  bool done = false, cancelled = false, running = false;
+  String? id, title, path, error, ext;
+  int bytes = 0;
+  Item(this.p, this.audio, this.q, this.url);
+
+  /// Quality key the server expects: '720p' or '192'.
+  String get key => audio ? q.split(' ').first : q;
+
+  Map<String, dynamic> toJson() => {
+        'p': platforms.indexOf(p),
+        'audio': audio,
+        'q': q,
+        'url': url,
+        'title': title,
+        'path': path,
+        'ext': ext,
+        'bytes': bytes,
+      };
+
+  static Item? fromJson(Map<String, dynamic> m) {
+    final pi = m['p'];
+    if (pi is! int || pi < 0 || pi >= platforms.length) return null;
+    final it = Item(platforms[pi], m['audio'] == true, '${m['q']}', '${m['url']}');
+    it.title = m['title'] as String?;
+    it.path = m['path'] as String?;
+    it.ext = m['ext'] as String?;
+    it.bytes = m['bytes'] is int ? m['bytes'] as int : 0;
+    it.done = true;
+    it.pr = 100;
+    return it;
+  }
 }
 
 class FlixGoApp extends StatelessWidget {
@@ -152,7 +206,12 @@ class _HomeState extends State<Home> {
   bool wifiOnly = true, autoPlay = false;
   int tab = 0, vq = 1, aq = 1, filter = 0;
   final url = TextEditingController();
+  final serverCtl = TextEditingController();
+  final keyCtl = TextEditingController();
   final items = <Item>[];
+  SharedPreferences? prefs;
+  bool testing = false, testOk = false;
+  String? testMsg;
 
   Pal get c => dark ? darkPal : lightPal;
   String t(String k) => tr[ar ? 'ar' : 'en']![k]!;
@@ -165,15 +224,92 @@ class _HomeState extends State<Home> {
   }
 
   String title(Item i) => '${t(i.audio ? 'aT' : 'vT')}${t('from')}${pn(i.p)}';
+  String dt(Item i) =>
+      (i.title != null && i.title!.isNotEmpty) ? i.title! : title(i);
+  // Real size only; empty until the file is saved.
   String size(Item i) =>
-      i.audio ? '4.2${t('mb')}' : '${sizes[i.q]}${t('mb')}';
+      i.bytes > 0 ? '${(i.bytes / 1048576).toStringAsFixed(1)}${t('mb')}' : '';
+  String sub(Item i) => [t(i.audio ? 'aK' : 'vK'), i.q, size(i)]
+      .where((e) => e.isNotEmpty)
+      .join(' · ');
   String est() =>
       audio ? '≈ 4.2${t('mb')}' : '≈ ${sizes[qv[vq][0]]}${t('mb')}';
 
   @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
   void dispose() {
     url.dispose();
+    serverCtl.dispose();
+    keyCtl.dispose();
     super.dispose();
+  }
+
+  Future<void> _load() async {
+    final sp = await SharedPreferences.getInstance();
+    final list = <Item>[];
+    for (final s in sp.getStringList('items') ?? const <String>[]) {
+      try {
+        final it = Item.fromJson(jsonDecode(s) as Map<String, dynamic>);
+        if (it != null && it.path != null && File(it.path!).existsSync()) {
+          list.add(it);
+        }
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      prefs = sp;
+      ar = sp.getBool('ar') ?? ar;
+      dark = sp.getBool('dark') ?? dark;
+      wifiOnly = sp.getBool('wifiOnly') ?? wifiOnly;
+      autoPlay = sp.getBool('autoPlay') ?? autoPlay;
+      vq = (sp.getInt('vq') ?? vq).clamp(0, qv.length - 1).toInt();
+      aq = (sp.getInt('aq') ?? aq).clamp(0, qa.length - 1).toInt();
+      serverCtl.text = sp.getString('server') ?? '';
+      keyCtl.text = sp.getString('key') ?? '';
+      items.addAll(list);
+    });
+  }
+
+  void _saveSettings() {
+    final sp = prefs;
+    if (sp == null) return;
+    sp.setBool('ar', ar);
+    sp.setBool('dark', dark);
+    sp.setBool('wifiOnly', wifiOnly);
+    sp.setBool('autoPlay', autoPlay);
+    sp.setInt('vq', vq);
+    sp.setInt('aq', aq);
+    sp.setString('server', serverCtl.text.trim());
+    sp.setString('key', keyCtl.text.trim());
+  }
+
+  /// setState + persist settings.
+  void sset(VoidCallback f) {
+    setState(f);
+    _saveSettings();
+  }
+
+  void _saveItems() {
+    prefs?.setStringList('items', [
+      for (final i in items)
+        if (i.done && i.path != null) jsonEncode(i.toJson())
+    ]);
+  }
+
+  void _del(File? f) {
+    try {
+      if (f != null && f.existsSync()) f.deleteSync();
+    } catch (_) {}
+  }
+
+  void _delItem(Item i) {
+    i.cancelled = true;
+    if (i.path != null) _del(File(i.path!));
   }
 
   void toast(String m) {
@@ -192,7 +328,7 @@ class _HomeState extends State<Home> {
   Future<void> paste() async {
     final d = await Clipboard.getData('text/plain');
     final txt = d?.text ?? '';
-    url.text = txt.isNotEmpty ? txt : 'https://youtu.be/AbCd1234';
+    if (txt.isNotEmpty) url.text = txt.trim();
     setState(() {});
   }
 
@@ -206,34 +342,226 @@ class _HomeState extends State<Home> {
       toast(t('need'));
       return;
     }
+    if (serverCtl.text.trim().isEmpty) {
+      toast(t('noServer'));
+      setState(() => tab = 2);
+      return;
+    }
     final qq = audio ? qa[aq] : qv[vq];
-    final it = Item(p, audio, audio ? '${qq[0]} kbps' : qq[0]);
+    final it = Item(p, audio, audio ? '${qq[0]} kbps' : qq[0], url.text.trim());
     setState(() {
       items.insert(0, it);
       url.clear();
     });
     toast(t('started'));
-    // Simulated progress. Replace with your real download service.
-    Timer.periodic(const Duration(milliseconds: 350), (tm) {
-      if (!mounted) {
-        tm.cancel();
+    run(it);
+  }
+
+  String errText(ApiException e) {
+    switch (e.code) {
+      case 'auth':
+        return t('eAuth');
+      case 'net':
+        return t('eNet');
+      case 'wifi':
+        return t('wifiBlock');
+      default:
+        final m = e.message.trim();
+        if (m.isEmpty) return t('eGen');
+        return m.length > 140 ? '${m.substring(0, 140)}…' : m;
+    }
+  }
+
+  void _fail(Item it, String msg) {
+    it.error = msg;
+    it.pr = 0;
+    if (mounted) {
+      setState(() {});
+      toast(msg);
+    }
+  }
+
+  void _tick(Item it, double v) {
+    final n = min(99.0, v);
+    final changed = n.floor() != it.pr.floor();
+    it.pr = n;
+    if (changed && mounted) setState(() {});
+  }
+
+  String _safe(String s) {
+    var r = s.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_').trim();
+    if (r.length > 60) r = r.substring(0, 60).trim();
+    return r.isEmpty ? 'flixgo' : r;
+  }
+
+  Future<Directory> _saveDir() async {
+    final base = await getApplicationDocumentsDirectory();
+    final d = Directory('${base.path}/FlixGo');
+    if (!d.existsSync()) d.createSync(recursive: true);
+    return d;
+  }
+
+  /// Real download: ask the server to prepare the file (0–60 %),
+  /// then stream it to the phone (60–100 %).
+  Future<void> run(Item it) async {
+    if (it.running) return;
+    it.running = true;
+    it.error = null;
+    it.pr = 0;
+    if (mounted) setState(() {});
+    File? out;
+    try {
+      if (wifiOnly) {
+        final r = await Connectivity().checkConnectivity();
+        final wifi = r.contains(ConnectivityResult.wifi) ||
+            r.contains(ConnectivityResult.ethernet);
+        if (!wifi && r.contains(ConnectivityResult.mobile)) {
+          throw ApiException('wifi');
+        }
+      }
+      final api = Api(serverCtl.text, keyCtl.text);
+      final id = it.id ??
+          await api.createJob(it.url, it.audio ? 'audio' : 'video', it.key);
+      it.id = id;
+
+      final deadline = DateTime.now().add(const Duration(minutes: 30));
+      var fails = 0;
+      while (true) {
+        if (it.cancelled) return;
+        JobStatus st;
+        try {
+          st = await api.status(id);
+          fails = 0;
+        } on ApiException catch (e) {
+          if (e.code == 'net' && ++fails < 4) {
+            await Future<void>.delayed(const Duration(seconds: 2));
+            continue;
+          }
+          rethrow;
+        }
+        if (st.title != null && st.title!.isNotEmpty) it.title = st.title;
+        if (st.status == 'error') {
+          throw ApiException('server', st.error ?? '');
+        }
+        if (st.status == 'ready') {
+          it.ext = st.ext ?? (it.audio ? 'mp3' : 'mp4');
+          break;
+        }
+        _tick(it, st.progress * 60);
+        if (DateTime.now().isAfter(deadline)) throw ApiException('net');
+        await Future<void>.delayed(const Duration(milliseconds: 1200));
+      }
+
+      final dir = await _saveDir();
+      final name =
+          '${_safe(it.title ?? title(it))}_${id.substring(0, min(6, id.length))}.${it.ext}';
+      out = File('${dir.path}/$name');
+      _tick(it, 60);
+      final bytes = await api.download(id, out.path,
+          cancelled: () => it.cancelled,
+          onProgress: (got, total) {
+            final f = (total != null && total > 0) ? got / total : 0.5;
+            _tick(it, (60 + 40 * f.clamp(0.0, 1.0)).toDouble());
+          });
+      if (it.cancelled) {
+        _del(out);
         return;
       }
-      setState(() => it.pr = min(100, it.pr + Random().nextDouble() * 14 + 4));
-      if (it.done) {
-        tm.cancel();
-        toast('${t('done')}${title(it)}');
-        if (autoPlay) openPlayer(it);
-      }
+      it.bytes = bytes;
+      it.path = out.path;
+      it.pr = 100;
+      it.done = true;
+      _saveItems();
+      if (!mounted) return;
+      setState(() {});
+      toast('${t('done')}${dt(it)}');
+      if (autoPlay) openPlayer(it);
+    } on ApiException catch (e) {
+      _del(out);
+      if (e.code == 'cancelled' || it.cancelled) return;
+      it.id = null;
+      _fail(it, errText(e));
+    } on FileSystemException {
+      _del(out);
+      it.id = null;
+      _fail(it, t('eSave'));
+    } catch (_) {
+      _del(out);
+      it.id = null;
+      _fail(it, t('eGen'));
+    } finally {
+      it.running = false;
+    }
+  }
+
+  Future<void> confirmDelete(Item i) async {
+    final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => Directionality(
+            textDirection: ar ? TextDirection.rtl : TextDirection.ltr,
+            child: AlertDialog(
+              backgroundColor: c.card,
+              title: Text(t('delTitle'),
+                  style: TextStyle(
+                      color: c.ink, fontWeight: FontWeight.w800, fontSize: 18)),
+              content: Text(t('delBody'), style: TextStyle(color: c.mute)),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: Text(t('cancel'), style: TextStyle(color: c.mute))),
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: Text(t('delYes'),
+                        style: TextStyle(
+                            color: c.pink, fontWeight: FontWeight.w700))),
+              ],
+            ),
+          ),
+        ) ??
+        false;
+    if (!ok || !mounted) return;
+    _delItem(i);
+    setState(() => items.remove(i));
+    _saveItems();
+  }
+
+  Future<void> testServer() async {
+    if (serverCtl.text.trim().isEmpty) {
+      setState(() {
+        testOk = false;
+        testMsg = t('noServer');
+      });
+      return;
+    }
+    setState(() {
+      testing = true;
+      testMsg = null;
     });
+    try {
+      final r = await Api(serverCtl.text, keyCtl.text).ping();
+      if (!mounted) return;
+      setState(() {
+        testing = false;
+        testOk = r['ffmpeg'] != false;
+        testMsg = testOk ? t('testOk') : t('testNoFfmpeg');
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        testing = false;
+        testOk = false;
+        testMsg = errText(e);
+      });
+    }
   }
 
   void openPlayer(Item i) {
+    if (i.path == null) return;
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => PlayerPage(
-        title: title(i),
-        subtitle: '${t(i.audio ? 'aK' : 'vK')} · ${i.q} · ${size(i)}',
-        source: i.audio ? kDemoAudio : kDemoVideo,
+        title: dt(i),
+        subtitle: sub(i),
+        path: i.path,
         pageTitle: t('player'),
         errorText: t('playErr'),
         demoText: t('demo'),
@@ -328,7 +656,7 @@ class _HomeState extends State<Home> {
                       ),
                     ),
                     TextButton(
-                      onPressed: () => setState(() => ar = !ar),
+                      onPressed: () => sset(() => ar = !ar),
                       style: TextButton.styleFrom(
                           minimumSize: const Size(88, 44)),
                       child: Text(t('other'),
@@ -378,12 +706,12 @@ class _HomeState extends State<Home> {
                   color: c.ink, fontSize: 22, fontWeight: FontWeight.w800)),
           const Spacer(),
           sq(Icon(Icons.language_rounded, color: c.ink, size: 20),
-              () => setState(() => ar = !ar), t('other')),
+              () => sset(() => ar = !ar), t('other')),
           const SizedBox(width: 8),
           sq(
               Icon(dark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
                   color: c.ink, size: 20),
-              () => setState(() => dark = !dark),
+              () => sset(() => dark = !dark),
               'theme'),
         ]),
       );
@@ -554,7 +882,7 @@ class _HomeState extends State<Home> {
         Wrap(spacing: 9, runSpacing: 9, children: [
           for (var i = 0; i < qs.length; i++)
             chipBox(qs[i][0], qs[i][ar ? 1 : 2], sel == i, () {
-              setState(() {
+              sset(() {
                 if (audio) {
                   aq = i;
                 } else {
@@ -603,8 +931,14 @@ class _HomeState extends State<Home> {
 
   Widget card(Item i) {
     final done = i.done;
+    final failed = i.error != null && !i.running;
     return GestureDetector(
-      onTap: done ? () => openPlayer(i) : null,
+      onTap: done
+          ? () => openPlayer(i)
+          : failed
+              ? () => run(i)
+              : null,
+      onLongPress: () => confirmDelete(i),
       child: Container(
       margin: const EdgeInsets.only(top: 12),
       padding: const EdgeInsets.all(12),
@@ -627,29 +961,36 @@ class _HomeState extends State<Home> {
         const SizedBox(width: 12),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title(i),
+            Text(dt(i),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                     color: c.ink, fontSize: 15, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
-            Text('${t(i.audio ? 'aK' : 'vK')} · ${i.q} · ${size(i)}',
-                style: TextStyle(color: c.mute, fontSize: 12.5)),
-            const SizedBox(height: 8),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(9),
-              child: LinearProgressIndicator(
-                  value: i.pr / 100,
-                  minHeight: 7,
-                  backgroundColor: c.bg2,
-                  color: c.aqua),
-            ),
+            Text(failed ? i.error! : sub(i),
+                maxLines: failed ? 2 : 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    color: failed ? c.pink : c.mute, fontSize: 12.5)),
+            if (!failed) ...[
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(9),
+                child: LinearProgressIndicator(
+                    value: i.pr / 100,
+                    minHeight: 7,
+                    backgroundColor: c.bg2,
+                    color: c.aqua),
+              ),
+            ],
           ]),
         ),
         const SizedBox(width: 12),
         SizedBox(
           width: 44,
-          child: done
+          child: failed
+              ? Icon(Icons.refresh_rounded, color: c.pink, size: 28)
+              : done
               ? Semantics(
                   button: true,
                   label: t('play'),
@@ -700,6 +1041,12 @@ class _HomeState extends State<Home> {
           chipBox(
               t('fDone'), '', filter == 2, () => setState(() => filter = 2)),
         ]),
+        if (n > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Text(t('hint'),
+                style: TextStyle(color: c.mute, fontSize: 12, height: 1.5)),
+          ),
         if (shown.isEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 60),
@@ -847,6 +1194,30 @@ class _HomeState extends State<Home> {
         ]),
       );
 
+  Widget field(TextEditingController ctl, String hint, {bool obscure = false}) =>
+      Container(
+        height: 48,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.center,
+        decoration:
+            BoxDecoration(color: c.bg2, borderRadius: BorderRadius.circular(14)),
+        child: TextField(
+          controller: ctl,
+          obscureText: obscure,
+          autocorrect: false,
+          enableSuggestions: false,
+          keyboardType: obscure ? TextInputType.text : TextInputType.url,
+          textDirection: TextDirection.ltr,
+          onChanged: (_) => _saveSettings(),
+          style: TextStyle(color: c.ink, fontSize: 14),
+          decoration: InputDecoration(
+              border: InputBorder.none,
+              isDense: true,
+              hintText: hint,
+              hintStyle: TextStyle(color: c.mute)),
+        ),
+      );
+
   Widget settingsPage() => ListView(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 110),
         children: [
@@ -860,11 +1231,59 @@ class _HomeState extends State<Home> {
             optionRow(
                 'theme',
                 segControl([t('light'), t('dark')], dark ? 1 : 0,
-                    (i) => setState(() => dark = i == 1))),
+                    (i) => sset(() => dark = i == 1))),
             optionRow(
                 'lang',
                 segControl(['العربية', 'English'], ar ? 0 : 1,
-                    (i) => setState(() => ar = i == 0))),
+                    (i) => sset(() => ar = i == 0))),
+          ]),
+          secTitle('secServer'),
+          group([
+            optionRow('srvUrl', field(serverCtl, 'https://my-server.onrender.com')),
+            optionRow('srvKey', field(keyCtl, '••••••••', obscure: true)),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Row(children: [
+                GestureDetector(
+                  onTap: testing ? null : testServer,
+                  child: Container(
+                    height: 44,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                        color: c.aquaBg,
+                        borderRadius: BorderRadius.circular(99),
+                        border: Border.all(color: c.aqua, width: 1.5)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      if (testing)
+                        SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: c.aqua))
+                      else
+                        Icon(Icons.wifi_tethering_rounded,
+                            color: c.ink, size: 18),
+                      const SizedBox(width: 8),
+                      Text(t(testing ? 'testing' : 'srvTest'),
+                          style: TextStyle(
+                              color: c.ink,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14)),
+                    ]),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                if (testMsg != null)
+                  Expanded(
+                    child: Text(testMsg!,
+                        style: TextStyle(
+                            color: testOk ? c.aqua : c.pink,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700)),
+                  ),
+              ]),
+            ),
           ]),
           secTitle('secDl'),
           group([
@@ -872,19 +1291,19 @@ class _HomeState extends State<Home> {
                 'defVideo',
                 Wrap(spacing: 8, runSpacing: 8, children: [
                   for (var i = 0; i < qv.length; i++)
-                    chipBox(qv[i][0], '', vq == i, () => setState(() => vq = i)),
+                    chipBox(qv[i][0], '', vq == i, () => sset(() => vq = i)),
                 ])),
             optionRow(
                 'defAudio',
                 Wrap(spacing: 8, runSpacing: 8, children: [
                   for (var i = 0; i < qa.length; i++)
                     chipBox('${qa[i][0]} kbps', '', aq == i,
-                        () => setState(() => aq = i)),
+                        () => sset(() => aq = i)),
                 ])),
             switchRow('wifi', 'wifiSub', wifiOnly,
-                (v) => setState(() => wifiOnly = v)),
+                (v) => sset(() => wifiOnly = v)),
             switchRow('autoPlay', 'autoSub', autoPlay,
-                (v) => setState(() => autoPlay = v)),
+                (v) => sset(() => autoPlay = v)),
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 14),
               child: Row(children: [
@@ -900,8 +1319,7 @@ class _HomeState extends State<Home> {
                                 fontSize: 14,
                                 fontWeight: FontWeight.w700)),
                         const SizedBox(height: 2),
-                        Text('Downloads/FlixGo',
-                            textDirection: TextDirection.ltr,
+                        Text(t('folderVal'),
                             style: TextStyle(color: c.mute, fontSize: 12.5)),
                       ]),
                 ),
@@ -913,7 +1331,11 @@ class _HomeState extends State<Home> {
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: () {
+                for (final i in items) {
+                  _delItem(i);
+                }
                 setState(() => items.clear());
+                _saveItems();
                 toast(t('cleared'));
               },
               child: Container(
