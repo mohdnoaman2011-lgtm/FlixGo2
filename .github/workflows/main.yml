@@ -1,1 +1,60 @@
 
+name: Build FlixGo APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: flutter_project
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android folder if missing
+        run: |
+          if [ ! -d android ]; then
+            cp lib/main.dart /tmp/main.dart
+            cp pubspec.yaml /tmp/pubspec.yaml
+            flutter create . --project-name flixgo --platforms=android
+            cp /tmp/main.dart lib/main.dart
+            cp /tmp/pubspec.yaml pubspec.yaml
+            rm -rf test
+          fi
+
+      - name: Allow internet access in release build (for fonts)
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <application|' "$MANIFEST"
+          fi
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: flixgo-apk
+          path: flutter_project/build/app/outputs/flutter-apk/app-release.apk
