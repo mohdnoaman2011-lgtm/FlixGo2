@@ -1,17 +1,13 @@
-// FlixGo — Flutter UI (no external packages).
-// 1) flutter create flixgo
-// 2) Put flixgo_logo.png and flixgo_mark.png in assets/ and declare them in pubspec.yaml:
-//      flutter:
-//        assets:
-//          - assets/flixgo_logo.png
-//          - assets/flixgo_mark.png
-//    (optional) add the Tajawal font for the same look.
-// 3) Replace lib/main.dart with this file, then flutter run.
+// FlixGo — Flutter UI.
+// Files: lib/main.dart (this file) + lib/logo_data.dart (embedded logo).
+// Dependencies: google_fonts (see pubspec.yaml). No assets folder needed.
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+
+import 'logo_data.dart';
 
 void main() => runApp(const FlixGoApp());
 
@@ -234,8 +230,8 @@ class _HomeState extends State<Home> {
                   padding: const EdgeInsets.fromLTRB(28, 0, 28, 28),
                   child: Column(children: [
                     const SizedBox(height: 190),
-                    Image.asset('assets/flixgo_logo.png',
-                        width: 230, fit: BoxFit.contain),
+                    Image.memory(kLogoBytes,
+                        width: 230, fit: BoxFit.contain, gaplessPlayback: true),
                     const SizedBox(height: 96),
                     Text(t('tag'),
                         textAlign: TextAlign.center,
@@ -332,7 +328,7 @@ class _HomeState extends State<Home> {
         child: Row(children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(12),
-            child: Image.asset('assets/flixgo_mark.png',
+            child: Image.memory(kMarkBytes,
                 width: 42, height: 42, fit: BoxFit.cover),
           ),
           const SizedBox(width: 10),
