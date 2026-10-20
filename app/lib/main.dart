@@ -1,6 +1,6 @@
 // FlixGo — Flutter UI.
-// Files: lib/main.dart (this file) + lib/logo_data.dart (embedded logo).
-// Dependencies: google_fonts (see pubspec.yaml). No assets folder needed.
+// Files: lib/main.dart (this file), lib/logo_data.dart (embedded logo), lib/player.dart (built-in player).
+// Dependencies: google_fonts, video_player (see pubspec.yaml). No assets folder needed.
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'logo_data.dart';
+import 'player.dart';
 
 void main() => runApp(const FlixGoApp());
 
@@ -77,7 +78,18 @@ const tr = {
     'vK': 'فيديو', 'aK': 'صوت', 'mb': ' ميغابايت', 'ok': 'تم',
     'empty': 'لا توجد تحميلات هنا.\nالصق رابطاً وابدأ.',
     'l0': 'ملفاتك تظهر هنا.', 'fAll': 'الكل', 'fAct': 'قيد التحميل',
-    'fDone': 'مكتمل',
+    'fDone': 'مكتمل', 'settings': 'الإعدادات', 'setSub': 'خصّص التطبيق كما تريد.',
+    'secLook': 'المظهر واللغة', 'theme': 'المظهر', 'light': 'فاتح',
+    'dark': 'داكن', 'lang': 'اللغة', 'secDl': 'التحميل',
+    'defVideo': 'جودة الفيديو الافتراضية',
+    'defAudio': 'جودة الصوت الافتراضية', 'wifi': 'التحميل عبر Wi‑Fi فقط',
+    'wifiSub': 'يوفّر باقة الإنترنت', 'autoPlay': 'تشغيل تلقائي بعد التحميل',
+    'autoSub': 'يفتح المشغل عند اكتمال الملف', 'folder': 'مكان الحفظ',
+    'secData': 'البيانات', 'clear': 'مسح قائمة التحميلات',
+    'cleared': 'تم مسح القائمة', 'secAbout': 'حول التطبيق',
+    'version': 'الإصدار', 'player': 'المشغل',
+    'playErr': 'تعذّر تشغيل الملف. تحقق من الاتصال بالإنترنت.',
+    'demo': 'معاينة تجريبية بملف نموذجي', 'play': 'تشغيل',
   },
   'en': {
     'tag': 'Download video and audio\nfrom your favorite platforms',
@@ -94,7 +106,18 @@ const tr = {
     'vK': 'Video', 'aK': 'Audio', 'mb': ' MB', 'ok': 'Done',
     'empty': 'No downloads here.\nPaste a link to start.',
     'l0': 'Your files show up here.', 'fAll': 'All', 'fAct': 'Downloading',
-    'fDone': 'Done',
+    'fDone': 'Done', 'settings': 'Settings', 'setSub': 'Customize the app.',
+    'secLook': 'Appearance & language', 'theme': 'Theme', 'light': 'Light',
+    'dark': 'Dark', 'lang': 'Language', 'secDl': 'Downloads',
+    'defVideo': 'Default video quality',
+    'defAudio': 'Default audio quality', 'wifi': 'Download on Wi‑Fi only',
+    'wifiSub': 'Saves mobile data', 'autoPlay': 'Play after download',
+    'autoSub': 'Opens the player when a file finishes', 'folder': 'Save location',
+    'secData': 'Data', 'clear': 'Clear downloads list',
+    'cleared': 'List cleared', 'secAbout': 'About',
+    'version': 'Version', 'player': 'Player',
+    'playErr': 'Could not play this file. Check your internet connection.',
+    'demo': 'Demo preview using a sample file', 'play': 'Play',
   },
 };
 
@@ -126,6 +149,7 @@ class Home extends StatefulWidget {
 
 class _HomeState extends State<Home> {
   bool ar = true, dark = true, audio = false, err = false, started = false;
+  bool wifiOnly = true, autoPlay = false;
   int tab = 0, vq = 1, aq = 1, filter = 0;
   final url = TextEditingController();
   final items = <Item>[];
@@ -199,8 +223,25 @@ class _HomeState extends State<Home> {
       if (it.done) {
         tm.cancel();
         toast('${t('done')}${title(it)}');
+        if (autoPlay) openPlayer(it);
       }
     });
+  }
+
+  void openPlayer(Item i) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => PlayerPage(
+        title: title(i),
+        subtitle: '${t(i.audio ? 'aK' : 'vK')} · ${i.q} · ${size(i)}',
+        source: i.audio ? kDemoAudio : kDemoVideo,
+        pageTitle: t('player'),
+        errorText: t('playErr'),
+        demoText: t('demo'),
+        audio: i.audio,
+        rtl: ar,
+        accent: i.p.c,
+      ),
+    ));
   }
 
   // ---------- Splash ----------
@@ -562,7 +603,9 @@ class _HomeState extends State<Home> {
 
   Widget card(Item i) {
     final done = i.done;
-    return Container(
+    return GestureDetector(
+      onTap: done ? () => openPlayer(i) : null,
+      child: Container(
       margin: const EdgeInsets.only(top: 12),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -607,22 +650,27 @@ class _HomeState extends State<Home> {
         SizedBox(
           width: 44,
           child: done
-              ? Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(Icons.check_rounded, color: c.aqua, size: 16),
-                  const SizedBox(width: 2),
-                  Text(t('ok'),
-                      style: TextStyle(
-                          color: c.aqua,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700)),
-                ])
+              ? Semantics(
+                  button: true,
+                  label: t('play'),
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                            colors: [brandViolet, brandMagenta])),
+                    child: const Icon(Icons.play_arrow_rounded,
+                        color: Colors.white, size: 26),
+                  ),
+                )
               : Text('${i.pr.floor()}%',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                       color: c.ink, fontSize: 13, fontWeight: FontWeight.w700)),
         ),
       ]),
-    );
+    ));
   }
 
   Widget listPage() {
@@ -668,6 +716,243 @@ class _HomeState extends State<Home> {
     );
   }
 
+  // ---------- Settings ----------
+  Widget secTitle(String k) => Padding(
+        padding: const EdgeInsets.only(top: 22, bottom: 10),
+        child: Text(t(k),
+            style: TextStyle(
+                color: c.ink, fontSize: 15, fontWeight: FontWeight.w700)),
+      );
+
+  Widget group(List<Widget> rows) {
+    final kids = <Widget>[];
+    for (var i = 0; i < rows.length; i++) {
+      if (i > 0) kids.add(Divider(height: 1, thickness: 1, color: c.line));
+      kids.add(rows[i]);
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+          color: c.card,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: c.line, width: 1.5)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: kids),
+    );
+  }
+
+  Widget optionRow(String labelKey, Widget child) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(t(labelKey),
+              style: TextStyle(
+                  color: c.ink, fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 10),
+          child,
+        ]),
+      );
+
+  Widget segControl(List<String> labels, int sel, void Function(int) onSel) =>
+      Container(
+        height: 48,
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+            color: c.bg2, borderRadius: BorderRadius.circular(14)),
+        child: Row(children: [
+          for (var i = 0; i < labels.length; i++)
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => onSel(i),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(11),
+                      gradient: sel == i
+                          ? const LinearGradient(
+                              colors: [brandViolet, Color(0xFFB8247D)])
+                          : null),
+                  child: Text(labels[i],
+                      style: TextStyle(
+                          color: sel == i ? Colors.white : c.mute,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14)),
+                ),
+              ),
+            ),
+        ]),
+      );
+
+  Widget toggle(bool on, void Function(bool) f, String label) => Semantics(
+        label: label,
+        toggled: on,
+        child: GestureDetector(
+          onTap: () => f(!on),
+          child: SizedBox(
+            width: 52,
+            height: 44,
+            child: Center(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: 52,
+                height: 30,
+                decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(15),
+                    color: on ? brandViolet : c.line),
+                child: AnimatedAlign(
+                  duration: const Duration(milliseconds: 200),
+                  alignment: on
+                      ? AlignmentDirectional.centerEnd
+                      : AlignmentDirectional.centerStart,
+                  child: Padding(
+                    padding: const EdgeInsets.all(3),
+                    child: Container(
+                      width: 24,
+                      height: 24,
+                      decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                                color: Color(0x40000000),
+                                blurRadius: 4,
+                                offset: Offset(0, 2))
+                          ]),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+  Widget switchRow(
+          String titleKey, String subKey, bool on, void Function(bool) f) =>
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Row(children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(t(titleKey),
+                  style: TextStyle(
+                      color: c.ink, fontSize: 14, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text(t(subKey),
+                  style: TextStyle(color: c.mute, fontSize: 12.5)),
+            ]),
+          ),
+          const SizedBox(width: 12),
+          toggle(on, f, t(titleKey)),
+        ]),
+      );
+
+  Widget settingsPage() => ListView(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 110),
+        children: [
+          Text(t('settings'),
+              style: TextStyle(
+                  color: c.ink, fontSize: 30, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          Text(t('setSub'), style: TextStyle(color: c.mute, fontSize: 14)),
+          secTitle('secLook'),
+          group([
+            optionRow(
+                'theme',
+                segControl([t('light'), t('dark')], dark ? 1 : 0,
+                    (i) => setState(() => dark = i == 1))),
+            optionRow(
+                'lang',
+                segControl(['العربية', 'English'], ar ? 0 : 1,
+                    (i) => setState(() => ar = i == 0))),
+          ]),
+          secTitle('secDl'),
+          group([
+            optionRow(
+                'defVideo',
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  for (var i = 0; i < qv.length; i++)
+                    chipBox(qv[i][0], '', vq == i, () => setState(() => vq = i)),
+                ])),
+            optionRow(
+                'defAudio',
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  for (var i = 0; i < qa.length; i++)
+                    chipBox('${qa[i][0]} kbps', '', aq == i,
+                        () => setState(() => aq = i)),
+                ])),
+            switchRow('wifi', 'wifiSub', wifiOnly,
+                (v) => setState(() => wifiOnly = v)),
+            switchRow('autoPlay', 'autoSub', autoPlay,
+                (v) => setState(() => autoPlay = v)),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Row(children: [
+                Icon(Icons.folder_outlined, color: c.mute, size: 22),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(t('folder'),
+                            style: TextStyle(
+                                color: c.ink,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 2),
+                        Text('Downloads/FlixGo',
+                            textDirection: TextDirection.ltr,
+                            style: TextStyle(color: c.mute, fontSize: 12.5)),
+                      ]),
+                ),
+              ]),
+            ),
+          ]),
+          secTitle('secData'),
+          group([
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                setState(() => items.clear());
+                toast(t('cleared'));
+              },
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 56),
+                alignment: AlignmentDirectional.centerStart,
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.delete_outline_rounded,
+                      color: dark ? c.pink : const Color(0xFFB3205F), size: 22),
+                  const SizedBox(width: 12),
+                  Text(t('clear'),
+                      style: TextStyle(
+                          color: dark ? c.pink : const Color(0xFFB3205F),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700)),
+                ]),
+              ),
+            ),
+          ]),
+          secTitle('secAbout'),
+          group([
+            Container(
+              constraints: const BoxConstraints(minHeight: 56),
+              alignment: Alignment.center,
+              child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(t('version'),
+                        style: TextStyle(
+                            color: c.ink,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700)),
+                    Text('1.0.0',
+                        style: TextStyle(color: c.mute, fontSize: 14)),
+                  ]),
+            ),
+          ]),
+        ],
+      );
+
   Widget navBtn(int i, String label, IconData ic, int badge) => Expanded(
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -677,25 +962,36 @@ class _HomeState extends State<Home> {
             decoration: BoxDecoration(
                 color: tab == i ? c.bg2 : Colors.transparent,
                 borderRadius: BorderRadius.circular(18)),
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(ic, size: 20, color: tab == i ? c.vio : c.mute),
-              const SizedBox(width: 8),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Stack(clipBehavior: Clip.none, children: [
+                Icon(ic, size: 22, color: tab == i ? c.vio : c.mute),
+                if (badge > 0)
+                  PositionedDirectional(
+                    top: -6,
+                    end: -14,
+                    child: Container(
+                      constraints:
+                          const BoxConstraints(minWidth: 18, minHeight: 18),
+                      alignment: Alignment.center,
+                      padding: const EdgeInsets.symmetric(horizontal: 5),
+                      decoration: BoxDecoration(
+                          color: c.pink,
+                          borderRadius: BorderRadius.circular(9)),
+                      child: Text('$badge',
+                          style: TextStyle(
+                              color: dark ? c.bg : Colors.white,
+                              fontSize: 11)),
+                    ),
+                  ),
+              ]),
+              const SizedBox(height: 2),
               Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                       color: tab == i ? c.vio : c.mute,
                       fontWeight: FontWeight.w700,
-                      fontSize: 14)),
-              if (badge > 0)
-                Container(
-                  margin: const EdgeInsetsDirectional.only(start: 8),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                  decoration: BoxDecoration(
-                      color: c.pink, borderRadius: BorderRadius.circular(9)),
-                  child: Text('$badge',
-                      style: TextStyle(
-                          color: dark ? c.bg : Colors.white, fontSize: 11)),
-                ),
+                      fontSize: 12)),
             ]),
           ),
         ),
@@ -721,6 +1017,7 @@ class _HomeState extends State<Home> {
           child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             navBtn(0, t('newDl'), Icons.add_rounded, 0),
             navBtn(1, t('dl'), Icons.inbox_outlined, items.length),
+            navBtn(2, t('settings'), Icons.tune_rounded, 0),
           ]),
         ),
       );
@@ -734,7 +1031,12 @@ class _HomeState extends State<Home> {
               child: Stack(children: [
                 Column(children: [
                   header(),
-                  Expanded(child: tab == 0 ? downloadPage() : listPage()),
+                  Expanded(
+                      child: tab == 0
+                          ? downloadPage()
+                          : tab == 1
+                              ? listPage()
+                              : settingsPage()),
                 ]),
                 nav(),
               ]),
